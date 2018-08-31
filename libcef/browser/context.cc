@@ -348,7 +348,7 @@ bool CefContext::Initialize(const CefMainArgs& args,
   init_thread_id_ = base::PlatformThread::CurrentId();
   settings_ = settings;
 
-#if !defined(OS_WIN)
+#if !defined(OS_WIN) && !defined(OS_LINUX)
   if (settings.multi_threaded_message_loop) {
     NOTIMPLEMENTED() << "multi_threaded_message_loop is not supported.";
     return false;
