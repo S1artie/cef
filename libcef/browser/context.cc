@@ -417,9 +417,9 @@ bool CefContext::Initialize(const CefMainArgs& args,
     if (result != 0) {
         const char* libcef_dir = dirname(const_cast<char*>(info.dli_fname));
         base::FilePath libcef_dir2 = base::FilePath(libcef_dir);
-        bool override_exe = PathService::Override(base::DIR_EXE, libcef_dir2);
+        bool override_exe = base::PathService::Override(base::DIR_EXE, libcef_dir2);
         DCHECK(override_exe);
-        bool override_mod = PathService::Override(base::DIR_MODULE, libcef_dir2);
+        bool override_mod = base::PathService::Override(base::DIR_MODULE, libcef_dir2);
         DCHECK(override_mod);
     }
 #endif // defined(OS_LINUX)
