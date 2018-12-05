@@ -20,6 +20,8 @@
 #include "base/command_line.h"
 #include "base/debug/debugger.h"
 #include "base/files/file_util.h"
+#include "base/files/file_path.h"
+#include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "components/network_session_configurator/common/network_switches.h"
@@ -39,6 +41,11 @@
 #include "components/crash/content/app/crashpad.h"
 #include "content/public/app/sandbox_helper_win.h"
 #include "sandbox/win/src/sandbox_types.h"
+#endif
+
+#if defined(OS_LINUX)
+#include <dlfcn.h>
+#include <libgen.h>
 #endif
 
 #if defined(OS_MACOSX) || defined(OS_WIN)
@@ -401,6 +408,21 @@ bool CefContext::Initialize(const CefMainArgs& args,
   sm_main_params_->argc = params.argc;
   sm_main_params_->argv = params.argv;
 #endif
+
+#if defined(OS_LINUX)
+    // Override paths: DIR_EXE = DIR_MODULE = <libcef.so.path> (Issue #1936)
+    Dl_info info = {0};
+    int result = dladdr((void*)&CefExecuteProcess, &info);
+    DCHECK(result != 0);
+    if (result != 0) {
+        const char* libcef_dir = dirname(const_cast<char*>(info.dli_fname));
+        base::FilePath libcef_dir2 = base::FilePath(libcef_dir);
+        bool override_exe = base::PathService::Override(base::DIR_EXE, libcef_dir2);
+        DCHECK(override_exe);
+        bool override_mod = base::PathService::Override(base::DIR_MODULE, libcef_dir2);
+        DCHECK(override_mod);
+    }
+#endif // defined(OS_LINUX)
 
   exit_code = service_manager::MainInitialize(*sm_main_params_);
   DCHECK_LT(exit_code, 0);
