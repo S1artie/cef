@@ -251,10 +251,10 @@ index 37cabf2c9ffa..a5165fdbfdf6 100644
          CreateDownloadURLLoaderFactoryGetter(storage_partition, rfh, true);
    }
 diff --git content/browser/loader/navigation_url_loader_impl.cc content/browser/loader/navigation_url_loader_impl.cc
-index d9034953e7f8..0e7c34daa4f8 100644
+index 2c8e4c488be4..be77d11bf2ba 100644
 --- content/browser/loader/navigation_url_loader_impl.cc
 +++ content/browser/loader/navigation_url_loader_impl.cc
-@@ -1131,7 +1131,7 @@ class NavigationURLLoaderImpl::URLLoaderRequestController
+@@ -1173,7 +1173,7 @@ class NavigationURLLoaderImpl::URLLoaderRequestController
      // path does as well for navigations.
      bool has_plugin = PluginService::GetInstance()->GetPluginInfo(
          -1 /* render_process_id */, -1 /* render_frame_id */, resource_context_,
@@ -263,7 +263,7 @@ index d9034953e7f8..0e7c34daa4f8 100644
          false /* allow_wildcard */, &stale, &plugin, nullptr);
  
      if (stale) {
-@@ -1495,7 +1495,7 @@ NavigationURLLoaderImpl::NavigationURLLoaderImpl(
+@@ -1536,7 +1536,7 @@ NavigationURLLoaderImpl::NavigationURLLoaderImpl(
    network::mojom::URLLoaderFactoryPtrInfo proxied_factory_info;
    network::mojom::URLLoaderFactoryRequest proxied_factory_request;
    bool bypass_redirect_checks = false;
@@ -599,10 +599,10 @@ index 51f91bdd7e2f..a67745058ed3 100644
              std::move(subresource_loader_factories), service_worker_context_,
              appcache_handle_core,
 diff --git content/browser/storage_partition_impl.h content/browser/storage_partition_impl.h
-index 6f6c5c1e504a..097095a613dd 100644
+index 78110a30b23a..f387d99af595 100644
 --- content/browser/storage_partition_impl.h
 +++ content/browser/storage_partition_impl.h
-@@ -95,7 +95,7 @@ class CONTENT_EXPORT StoragePartitionImpl
+@@ -97,7 +97,7 @@ class CONTENT_EXPORT StoragePartitionImpl
    storage::FileSystemContext* GetFileSystemContext() override;
    storage::DatabaseTracker* GetDatabaseTracker() override;
    DOMStorageContextWrapper* GetDOMStorageContext() override;
@@ -611,7 +611,7 @@ index 6f6c5c1e504a..097095a613dd 100644
    IndexedDBContextImpl* GetIndexedDBContext() override;
    CacheStorageContextImpl* GetCacheStorageContext() override;
    ServiceWorkerContextWrapper* GetServiceWorkerContext() override;
-@@ -136,14 +136,14 @@ class CONTENT_EXPORT StoragePartitionImpl
+@@ -138,14 +138,14 @@ class CONTENT_EXPORT StoragePartitionImpl
    void FlushNetworkInterfaceForTesting() override;
    void WaitForDeletionTasksForTesting() override;
  
@@ -634,9 +634,9 @@ index 6f6c5c1e504a..097095a613dd 100644
  
    // blink::mojom::StoragePartitionService interface.
    void OpenLocalStorage(const url::Origin& origin,
-@@ -152,18 +152,19 @@ class CONTENT_EXPORT StoragePartitionImpl
-       const std::string& namespace_id,
-       blink::mojom::SessionStorageNamespaceRequest request) override;
+@@ -159,18 +159,19 @@ class CONTENT_EXPORT StoragePartitionImpl
+       const std::vector<url::Origin>& origins,
+       OnCanSendReportingReportsCallback callback) override;
  
 -  scoped_refptr<URLLoaderFactoryGetter> url_loader_factory_getter() {
 -    return url_loader_factory_getter_;
@@ -658,7 +658,7 @@ index 6f6c5c1e504a..097095a613dd 100644
  
    auto& bindings_for_testing() { return bindings_; }
  
-@@ -174,10 +175,11 @@ class CONTENT_EXPORT StoragePartitionImpl
+@@ -181,10 +182,11 @@ class CONTENT_EXPORT StoragePartitionImpl
    // one must use the "chrome-guest://blahblah" site URL to ensure that the
    // service worker stays in this StoragePartition. This is an empty GURL if
    // this StoragePartition is not for guests.
