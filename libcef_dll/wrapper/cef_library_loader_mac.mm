@@ -48,21 +48,29 @@ std::string GetFrameworkPath(bool helper) {
 
 CefScopedLibraryLoader::CefScopedLibraryLoader() : loaded_(false) {}
 
-bool CefScopedLibraryLoader::Load(bool helper) {
+bool CefScopedLibraryLoader::Load(bool helper, char * frameworkPath) {
   if (loaded_) {
     return false;
   }
 
-  const std::string& framework_path = GetFrameworkPath(helper);
-  if (framework_path.empty()) {
-    fprintf(stderr, "App does not have the expected bundle structure.\n");
-    return false;
-  }
+  if (frameworkPath == NULL) {
+    const std::string& framework_path = GetFrameworkPath(helper);
+    if (framework_path.empty()) {
+      fprintf(stderr, "App does not have the expected bundle structure.\n");
+      return false;
+    }
 
-  // Load the CEF framework library.
-  if (!cef_load_library(framework_path.c_str())) {
-    fprintf(stderr, "Failed to load the CEF framework.\n");
-    return false;
+    // Load the CEF framework library.
+    if (!cef_load_library(framework_path.c_str())) {
+      fprintf(stderr, "Failed to load the CEF framework.\n");
+      return false;
+    }
+  } else {
+    // Load the CEF framework library.
+    if (!cef_load_library(frameworkPath)) {
+      fprintf(stderr, "Failed to load the CEF framework.\n");
+      return false;
+    }
   }
 
   loaded_ = true;
