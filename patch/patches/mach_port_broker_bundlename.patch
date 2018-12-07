@@ -1,0 +1,35 @@
+diff --git base/mac/mach_port_rendezvous.cc base/mac/mach_port_rendezvous.cc
+index 43e5806bec63..b14d4cde641f 100644
+--- base/mac/mach_port_rendezvous.cc
++++ base/mac/mach_port_rendezvous.cc
+@@ -134,7 +134,7 @@ MachPortRendezvousServer::ClientData::~ClientData() = default;
+ 
+ MachPortRendezvousServer::MachPortRendezvousServer() {
+   std::string bootstrap_name =
+-      StringPrintf(kBootstrapNameFormat, mac::BaseBundleID(), getpid());
++      StringPrintf(kBootstrapNameFormat, "cef", getpid());
+   kern_return_t kr = bootstrap_check_in(
+       bootstrap_port, bootstrap_name.c_str(),
+       mac::ScopedMachReceiveRight::Receiver(server_port_).get());
+@@ -294,7 +294,7 @@ size_t MachPortRendezvousClient::GetPortCount() {
+ 
+ // static
+ std::string MachPortRendezvousClient::GetBootstrapName() {
+-  return StringPrintf(kBootstrapNameFormat, mac::BaseBundleID(), getppid());
++  return StringPrintf(kBootstrapNameFormat, "cef", getppid());
+ }
+ 
+ bool MachPortRendezvousClient::AcquirePorts() {
+diff --git content/browser/child_process_task_port_provider_mac.cc content/browser/child_process_task_port_provider_mac.cc
+index 0feaaf3007a3..8efe7be91554 100644
+--- content/browser/child_process_task_port_provider_mac.cc
++++ content/browser/child_process_task_port_provider_mac.cc
+@@ -41,7 +41,7 @@ ChildProcessTaskPortProvider::ChildProcessTaskPortProvider() {
+   CHECK(base::mac::CreateMachPort(&notification_port_, nullptr));
+ 
+   const std::string dispatch_name = base::StringPrintf(
+-      "%s.ChildProcessTaskPortProvider.%p", base::mac::BaseBundleID(), this);
++      "%s.ChildProcessTaskPortProvider.%p", "cef", this);
+   notification_source_ = std::make_unique<base::DispatchSourceMach>(
+       dispatch_name.c_str(), notification_port_.get(), ^{
+         OnTaskPortDied();

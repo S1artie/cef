@@ -106,17 +106,18 @@ class CefScopedLibraryLoader {
   // bundle location relative to the executable. Returns true if the
   // load succeeds.
   ///
-  bool LoadInMain() { return Load(false); }
+  bool LoadInMain() { return Load(false, NULL); }
+  bool LoadInMain(char * frameworkPath) { return Load(false, frameworkPath); }
 
   ///
   // Load the CEF framework in the helper process from the expected app
   // bundle location relative to the executable. Returns true if the
   // load succeeds.
   ///
-  bool LoadInHelper() { return Load(true); }
+  bool LoadInHelper() { return Load(true, NULL); }
 
  private:
-  bool Load(bool helper);
+  bool Load(bool helper, char * frameworkPath);
 
   bool loaded_;
   DISALLOW_COPY_AND_ASSIGN(CefScopedLibraryLoader);
