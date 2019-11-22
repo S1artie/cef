@@ -1477,6 +1477,58 @@ void CefBrowserHostImpl::GetFrameNames(std::vector<CefString>& names) {
   }
 }
 
+void CefBrowserHostImpl::SetRenderingBlocked(bool blocked) {
+  if (CEF_CURRENTLY_ON_UIT()) {
+    if (!web_contents())
+      return;
+
+    content::RenderWidgetHostView* rwhv = web_contents()->GetRenderWidgetHostView();
+    if (!rwhv)
+      return;
+
+    content::RenderWidgetHost* rwh = rwhv->GetRenderWidgetHost();
+    if (!rwh)
+      return;
+
+    #if defined(USE_AURA)
+    if (blocked) {
+      if (!IsWindowless())
+        SetRenderingBlockedOnWindowCompositor(blocked);
+      rwh->SetSkipDrawing(blocked, base::OnceClosure());
+    } else {
+      if (!IsWindowless()) {
+        rwh->SetSkipDrawing(blocked, base::BindOnce(&CefBrowserHostImpl::SetRenderingBlockedOnWindowCompositor,
+                                                    this,
+                                                    blocked));
+      } else {
+        rwh->SetSkipDrawing(blocked, base::OnceClosure());
+      }
+    }
+    #else
+    rwh->SetSkipDrawing(blocked, base::OnceClosure());
+    #endif  // defined(USE_AURA)
+
+  } else {
+    CEF_POST_TASK(CEF_UIT,
+                  base::BindOnce(&CefBrowserHostImpl::SetRenderingBlocked,
+                                 this,
+                                 blocked));
+  }
+}
+
+#if defined(USE_AURA)
+void CefBrowserHostImpl::SetRenderingBlockedOnWindowCompositor(bool blocked) {
+  if (CEF_CURRENTLY_ON_UIT()) {
+    GetWindowWidget()->GetCompositor()->SetSkipDrawing(blocked);
+  } else {
+    CEF_POST_TASK(CEF_UIT,
+                  base::BindOnce(&CefBrowserHostImpl::SetRenderingBlockedOnWindowCompositor,
+                                 this,
+                                 blocked));
+  }
+}
+#endif  // defined(USE_AURA)
+
 // CefBrowserHostImpl public methods.
 // -----------------------------------------------------------------------------
 
