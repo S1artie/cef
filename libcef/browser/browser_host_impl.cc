@@ -77,6 +77,7 @@
 
 #if defined(OS_MACOSX)
 #include "components/spellcheck/browser/spellcheck_platform.h"
+#include "libcef/browser/ui_compositor_access_mac.h"
 #endif
 
 using content::KeyboardEventProcessingResult;
@@ -1467,6 +1468,115 @@ void CefBrowserHostImpl::GetFrameNames(std::vector<CefString>& names) {
     names.push_back(frame->GetName());
   }
 }
+
+// Injects the rendering block flag into the Chromium components where rendering must actually be blocked.
+// There are two places at which this must be done: the render widget host, which eventually forwards the
+// flag to the renderer process and the render widget, and secondly the UI compositor in the main browser
+// process (which takes whatever the renderer outputs and composes it together with UI elements into the
+// final image to be displayed in the native window). The first case is simple and uniform on all OSes.
+// The second one, not so much. It differs between systems on which CEF uses Aura (Windows, Linux) and MacOS
+// where Aura is not used. This difference is because the UI compositor is stored in different places:
+// in case of Aura, it's in the window widget, in case of non-Aura MacOS, it must be extracted from the
+// MacOS-specific RenderWidgetHostView subclass, which is a bit more complex and requires MacOS-specific
+// code separated into a helper class to access the compositor.
+// In both cases there is the additional caveat of having to re-enable rendering in a very distinct order:
+// first, re-enable it in the renderer process and force it to immediately render a frame, and only then
+// re-enable it on the compositor (because if we don't wait for a frame to be ready first, the compositor
+// may composite an empty white frame, which is exactly what we don't want to get). This is achieved by
+// using a callback closure handed over to the RenderWidgetHost, to be run when the first frame was
+// successfully rendered.
+void CefBrowserHostImpl::SetRenderingBlocked(bool blocked) {
+  if (CEF_CURRENTLY_ON_UIT()) {
+    if (!web_contents())
+      return;
+
+    content::RenderWidgetHostView* rwhv = web_contents()->GetRenderWidgetHostView();
+    if (!rwhv)
+      return;
+
+    content::RenderWidgetHost* rwh = rwhv->GetRenderWidgetHost();
+    if (!rwh)
+      return;
+
+    #if defined(OS_MACOSX)
+    if (blocked) {
+      if (!IsWindowless())
+        SetRenderingBlockedOnMacWindowCompositor(blocked);
+      rwh->SetSkipDrawing(blocked, base::OnceClosure());
+    } else {
+      if (!IsWindowless()) {
+        rwh->SetSkipDrawing(blocked, base::BindOnce(&CefBrowserHostImpl::SetRenderingBlockedOnMacWindowCompositor,
+                                                    this,
+                                                    blocked));
+      } else {
+        rwh->SetSkipDrawing(blocked, base::OnceClosure());
+      }
+    }
+    #else // defined(OS_MACOSX)
+    #if defined(USE_AURA)
+    if (blocked) {
+      if (!IsWindowless())
+        SetRenderingBlockedOnAuraWindowCompositor(blocked);
+      rwh->SetSkipDrawing(blocked, base::OnceClosure());
+    } else {
+      if (!IsWindowless()) {
+        rwh->SetSkipDrawing(blocked, base::BindOnce(&CefBrowserHostImpl::SetRenderingBlockedOnAuraWindowCompositor,
+                                                    this,
+                                                    blocked));
+      } else {
+        rwh->SetSkipDrawing(blocked, base::OnceClosure());
+      }
+    }
+    #else // defined(USE_AURA)
+    // Non-Aura and Non-MacOSX (shouldn't actually be needed at all)
+    rwh->SetSkipDrawing(blocked, base::OnceClosure());    
+    #endif  // defined(USE_AURA)
+    #endif  // defined(OS_MACOSX)
+
+  } else {
+    CEF_POST_TASK(CEF_UIT,
+                  base::BindOnce(&CefBrowserHostImpl::SetRenderingBlocked,
+                                 this,
+                                 blocked));
+  }
+}
+
+#if defined(USE_AURA)
+void CefBrowserHostImpl::SetRenderingBlockedOnAuraWindowCompositor(bool blocked) {
+  if (CEF_CURRENTLY_ON_UIT()) {
+    GetWindowWidget()->GetCompositor()->SetSkipDrawing(blocked);
+  } else {
+    CEF_POST_TASK(CEF_UIT,
+                  base::BindOnce(&CefBrowserHostImpl::SetRenderingBlockedOnAuraWindowCompositor,
+                                 this,
+                                 blocked));
+  }
+}
+#endif  // defined(USE_AURA)
+
+#if defined(OS_MACOSX)
+void CefBrowserHostImpl::SetRenderingBlockedOnMacWindowCompositor(bool blocked) {
+  if (CEF_CURRENTLY_ON_UIT()) {
+    content::RenderWidgetHostView* rwhv = web_contents()->GetRenderWidgetHostView();
+    if(!rwhv)
+      return;
+
+    UiCompositorAccessMac* access = new UiCompositorAccessMac();
+    ui::Compositor* compositor = access->ExtractCompositor(rwhv);
+    delete access;
+
+    if(!compositor)
+      return;
+      
+    compositor->SetSkipDrawing(blocked);
+  } else {
+    CEF_POST_TASK(CEF_UIT,
+                  base::BindOnce(&CefBrowserHostImpl::SetRenderingBlockedOnMacWindowCompositor,
+                                 this,
+                                 blocked));
+  }
+}
+#endif  // defined(OS_MACOSX)
 
 // CefBrowserHostImpl public methods.
 // -----------------------------------------------------------------------------
