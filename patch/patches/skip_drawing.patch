@@ -1,0 +1,428 @@
+diff --git cc/trees/layer_tree_host.cc cc/trees/layer_tree_host.cc
+index 09cd244629c4..a91eae47061f 100644
+--- cc/trees/layer_tree_host.cc
++++ cc/trees/layer_tree_host.cc
+@@ -686,6 +686,10 @@ void LayerTreeHost::ApplyPageScaleDeltaFromImplSide(
+   SetPageScaleFromImplSide(page_scale);
+ }
+ 
++void LayerTreeHost::SetSkipDrawing(bool skip_drawing) {
++  proxy_->SetSkipDrawing(skip_drawing);
++}
++
+ void LayerTreeHost::SetVisible(bool visible) {
+   if (visible_ == visible)
+     return;
+diff --git cc/trees/layer_tree_host.h cc/trees/layer_tree_host.h
+index 104cc541e97e..3cafbf732e52 100644
+--- cc/trees/layer_tree_host.h
++++ cc/trees/layer_tree_host.h
+@@ -175,6 +175,9 @@ class CC_EXPORT LayerTreeHost : public MutatorHostClient {
+ 
+   // Visibility and LayerTreeFrameSink -------------------------------
+ 
++  // Sets whether the render process should skip drawing results.
++  void SetSkipDrawing(bool skip_drawing);
++
+   // Sets or gets if the LayerTreeHost is visible. When not visible it will:
+   // - Not request a new LayerTreeFrameSink from the client.
+   // - Stop submitting frames to the display compositor.
+diff --git cc/trees/proxy.h cc/trees/proxy.h
+index 0fe7a90fe3fb..23368524fb98 100644
+--- cc/trees/proxy.h
++++ cc/trees/proxy.h
+@@ -45,6 +45,8 @@ class CC_EXPORT Proxy {
+ 
+   virtual void SetVisible(bool visible) = 0;
+ 
++  virtual void SetSkipDrawing(bool skip_drawing) = 0;
++
+   virtual void SetNeedsAnimate() = 0;
+   virtual void SetNeedsUpdateLayers() = 0;
+   virtual void SetNeedsCommit() = 0;
+diff --git cc/trees/proxy_main.cc cc/trees/proxy_main.cc
+index f5b1875c8b07..a2eb16b2eb8d 100644
+--- cc/trees/proxy_main.cc
++++ cc/trees/proxy_main.cc
+@@ -169,7 +169,7 @@ void ProxyMain::BeginMainFrame(
+   // When we don't need to produce a CompositorFrame, there's also no need to
+   // commit our updates. We still need to run layout and paint though, as it can
+   // have side effects on page loading behavior.
+-  bool skip_commit = begin_main_frame_state->begin_frame_args.animate_only;
++  bool skip_commit = skip_drawing_ | begin_main_frame_state->begin_frame_args.animate_only;
+ 
+   // If main frame updates and commits are deferred, skip the entire pipeline.
+   bool skip_full_pipeline = defer_main_frame_update_;
+@@ -386,6 +386,13 @@ void ProxyMain::SetVisible(bool visible) {
+                                 base::Unretained(proxy_impl_.get()), visible));
+ }
+ 
++void ProxyMain::SetSkipDrawing(bool skip_drawing) {
++  TRACE_EVENT1("cc", "ProxyMain::SetSkipDrawing", "skip", skip_drawing);
++  skip_drawing_ = skip_drawing;
++  if (!skip_drawing)
++    SetNeedsCommit();
++}
++
+ void ProxyMain::SetNeedsAnimate() {
+   DCHECK(IsMainThread());
+   if (SendCommitRequestToImplThreadIfNeeded(ANIMATE_PIPELINE_STAGE)) {
+diff --git cc/trees/proxy_main.h cc/trees/proxy_main.h
+index cfef4ce60311..276c5ce015e6 100644
+--- cc/trees/proxy_main.h
++++ cc/trees/proxy_main.h
+@@ -76,6 +76,7 @@ class CC_EXPORT ProxyMain : public Proxy {
+   void SetLayerTreeFrameSink(
+       LayerTreeFrameSink* layer_tree_frame_sink) override;
+   void SetVisible(bool visible) override;
++  void SetSkipDrawing(bool skip_drawing) override;
+   void SetNeedsAnimate() override;
+   void SetNeedsUpdateLayers() override;
+   void SetNeedsCommit() override;
+@@ -120,6 +121,8 @@ class CC_EXPORT ProxyMain : public Proxy {
+ 
+   const int layer_tree_host_id_;
+ 
++  bool skip_drawing_ = false;
++
+   // The furthest pipeline stage which has been requested for the next
+   // commit.
+   CommitPipelineStage max_requested_pipeline_stage_;
+diff --git cc/trees/single_thread_proxy.cc cc/trees/single_thread_proxy.cc
+index 64cf02bdbf25..cb6c576229ef 100644
+--- cc/trees/single_thread_proxy.cc
++++ cc/trees/single_thread_proxy.cc
+@@ -111,6 +111,15 @@ void SingleThreadProxy::SetVisible(bool visible) {
+     scheduler_on_impl_thread_->SetVisible(host_impl_->visible());
+ }
+ 
++void SingleThreadProxy::SetSkipDrawing(bool skip_drawing) {
++  TRACE_EVENT1("cc", "SingleThreadProxy::SetSkipDrawing", "skip", skip_drawing);
++  DebugScopedSetImplThread impl(task_runner_provider_);
++
++  skip_drawing_ = skip_drawing;
++  if (!skip_drawing)
++    SetNeedsCommitOnImplThread();
++}
++
+ void SingleThreadProxy::RequestNewLayerTreeFrameSink() {
+   DCHECK(task_runner_provider_->IsMainThread());
+   layer_tree_frame_sink_creation_callback_.Cancel();
+@@ -644,7 +653,7 @@ bool SingleThreadProxy::SupportsImplScrolling() const {
+ 
+ bool SingleThreadProxy::ShouldComposite() const {
+   DCHECK(task_runner_provider_->IsImplThread());
+-  return host_impl_->visible() && host_impl_->CanDraw();
++  return !skip_drawing_ && host_impl_->visible() && host_impl_->CanDraw();
+ }
+ 
+ void SingleThreadProxy::ScheduleRequestNewLayerTreeFrameSink() {
+@@ -801,7 +810,7 @@ void SingleThreadProxy::BeginMainFrame(
+   needs_impl_frame_ = false;
+   animate_requested_ = false;
+ 
+-  if (defer_main_frame_update_) {
++  if (skip_drawing_ | defer_main_frame_update_) {
+     TRACE_EVENT_INSTANT0("cc", "EarlyOut_DeferBeginMainFrame",
+                          TRACE_EVENT_SCOPE_THREAD);
+     BeginMainFrameAbortedOnImplThread(
+diff --git cc/trees/single_thread_proxy.h cc/trees/single_thread_proxy.h
+index 3cde647963d9..9d7d2f6f1bf0 100644
+--- cc/trees/single_thread_proxy.h
++++ cc/trees/single_thread_proxy.h
+@@ -46,6 +46,8 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
+       LayerTreeFrameSink* layer_tree_frame_sink) override;
+   void ReleaseLayerTreeFrameSink() override;
+   void SetVisible(bool visible) override;
++  void SetSkipDrawing(bool skip_drawing) override;
++  bool skip_drawing_ = false;
+   void SetNeedsAnimate() override;
+   void SetNeedsUpdateLayers() override;
+   void SetNeedsCommit() override;
+diff --git content/browser/renderer_host/render_view_host_delegate.h content/browser/renderer_host/render_view_host_delegate.h
+index e1b01b4d694e..26f886d1d018 100644
+--- content/browser/renderer_host/render_view_host_delegate.h
++++ content/browser/renderer_host/render_view_host_delegate.h
+@@ -198,6 +198,10 @@ class CONTENT_EXPORT RenderViewHostDelegate {
+   // The RenderView finished the first visually non-empty paint.
+   virtual void DidFirstVisuallyNonEmptyPaint(RenderViewHostImpl* source) {}
+ 
++  // The RenderView has issued a draw command, signaling the it
++  // has been visually updated.
++  virtual void DidCommitAndDrawCompositorFrame(RenderViewHostImpl* source) {}
++
+   // Returns true if the render view is rendering a portal.
+   virtual bool IsPortal() const;
+ 
+diff --git content/browser/renderer_host/render_view_host_impl.cc content/browser/renderer_host/render_view_host_impl.cc
+index 55bade49780f..5fbf6ab7e5a3 100644
+--- content/browser/renderer_host/render_view_host_impl.cc
++++ content/browser/renderer_host/render_view_host_impl.cc
+@@ -802,6 +802,10 @@ void RenderViewHostImpl::RenderWidgetDidFirstVisuallyNonEmptyPaint() {
+   delegate_->DidFirstVisuallyNonEmptyPaint(this);
+ }
+ 
++void RenderViewHostImpl::RenderWidgetDidCommitAndDrawCompositorFrame() {
++  delegate_->DidCommitAndDrawCompositorFrame(this);
++}
++
+ bool RenderViewHostImpl::SuddenTerminationAllowed() const {
+   return sudden_termination_allowed_;
+ }
+diff --git content/browser/renderer_host/render_view_host_impl.h content/browser/renderer_host/render_view_host_impl.h
+index 170e94a14032..6c5aed9cee5b 100644
+--- content/browser/renderer_host/render_view_host_impl.h
++++ content/browser/renderer_host/render_view_host_impl.h
+@@ -233,6 +233,7 @@ class CONTENT_EXPORT RenderViewHostImpl
+   void RenderWidgetDidInit() override;
+   void RenderWidgetDidClose() override;
+   void RenderWidgetDidFirstVisuallyNonEmptyPaint() override;
++  void RenderWidgetDidCommitAndDrawCompositorFrame() override;
+   void RenderWidgetGotFocus() override;
+   void RenderWidgetLostFocus() override;
+   void RenderWidgetDidForwardMouseEvent(
+diff --git content/browser/renderer_host/render_widget_host_impl.cc content/browser/renderer_host/render_widget_host_impl.cc
+index f9635e901a9a..08243de650c2 100644
+--- content/browser/renderer_host/render_widget_host_impl.cc
++++ content/browser/renderer_host/render_widget_host_impl.cc
+@@ -646,6 +646,8 @@ bool RenderWidgetHostImpl::OnMessageReceived(const IPC::Message &msg) {
+                         OnForceRedrawComplete)
+     IPC_MESSAGE_HANDLER(WidgetHostMsg_DidFirstVisuallyNonEmptyPaint,
+                         OnFirstVisuallyNonEmptyPaint)
++    IPC_MESSAGE_HANDLER(WidgetHostMsg_DidCommitAndDrawCompositorFrame,
++                        OnCommitAndDrawCompositorFrame)
+     IPC_MESSAGE_HANDLER(WidgetHostMsg_HasTouchEventHandlers,
+                         OnHasTouchEventHandlers)
+     IPC_MESSAGE_HANDLER(WidgetHostMsg_IntrinsicSizingInfoChanged,
+@@ -671,6 +673,15 @@ void RenderWidgetHostImpl::SetIsLoading(bool is_loading) {
+     view_->SetIsLoading(is_loading);
+ }
+ 
++void RenderWidgetHostImpl::SetSkipDrawing(bool skip_drawing, base::OnceClosure callback) {
++  TRACE_EVENT1("renderer_host", "RenderWidgetHostImpl::SetSkipDrawing", "skip", skip_drawing);
++  if (!skip_drawing) {
++    first_draw_after_skip_drawing_callback_ = std::move(callback);
++    is_first_draw_after_skip_drawing_ = true;
++  }
++  Send(new WidgetMsg_SetSkipDrawing(routing_id_, skip_drawing));
++}
++
+ void RenderWidgetHostImpl::WasHidden() {
+   if (is_hidden_)
+     return;
+@@ -1871,6 +1882,16 @@ void RenderWidgetHostImpl::OnFirstVisuallyNonEmptyPaint() {
+     owner_delegate_->RenderWidgetDidFirstVisuallyNonEmptyPaint();
+ }
+ 
++void RenderWidgetHostImpl::OnCommitAndDrawCompositorFrame() {
++  if (owner_delegate_)
++    owner_delegate_->RenderWidgetDidCommitAndDrawCompositorFrame();
++
++  if (is_first_draw_after_skip_drawing_ && !first_draw_after_skip_drawing_callback_.is_null()) {
++    is_first_draw_after_skip_drawing_ = false;
++    std::move(first_draw_after_skip_drawing_callback_).Run();
++  }
++}
++
+ void RenderWidgetHostImpl::RendererExited() {
+   if (!renderer_initialized_)
+     return;
+diff --git content/browser/renderer_host/render_widget_host_impl.h content/browser/renderer_host/render_widget_host_impl.h
+index bb4e82d6e32c..523a0d219f45 100644
+--- content/browser/renderer_host/render_widget_host_impl.h
++++ content/browser/renderer_host/render_widget_host_impl.h
+@@ -227,6 +227,9 @@ class CONTENT_EXPORT RenderWidgetHostImpl
+   int GetRoutingID() override;
+   RenderWidgetHostViewBase* GetView() override;
+   bool IsCurrentlyUnresponsive() override;
++  void SetSkipDrawing(bool skip_drawing, base::OnceClosure callback) override;
++  bool is_first_draw_after_skip_drawing_ = false;
++  base::OnceClosure first_draw_after_skip_drawing_callback_;
+   bool SynchronizeVisualProperties() override;
+   void AddKeyPressEventCallback(const KeyPressEventCallback& callback) override;
+   void RemoveKeyPressEventCallback(
+diff --git content/browser/renderer_host/render_widget_host_owner_delegate.h content/browser/renderer_host/render_widget_host_owner_delegate.h
+index a2eca4b2b442..515d68c9dbf8 100644
+--- content/browser/renderer_host/render_widget_host_owner_delegate.h
++++ content/browser/renderer_host/render_widget_host_owner_delegate.h
+@@ -42,6 +42,10 @@ class CONTENT_EXPORT RenderWidgetHostOwnerDelegate {
+   // The RenderWidget finished the first visually non-empty paint.
+   virtual void RenderWidgetDidFirstVisuallyNonEmptyPaint() = 0;
+ 
++  // The RenderWidget has issued a draw command, signaling the widget
++  // has been visually updated.
++  virtual void RenderWidgetDidCommitAndDrawCompositorFrame() = 0;
++
+   // The RenderWidgetHost got the focus.
+   virtual void RenderWidgetGotFocus() = 0;
+ 
+diff --git content/browser/web_contents/web_contents_impl.cc content/browser/web_contents/web_contents_impl.cc
+index aa2aeccdf7b2..05e96838558c 100644
+--- content/browser/web_contents/web_contents_impl.cc
++++ content/browser/web_contents/web_contents_impl.cc
+@@ -5200,6 +5200,12 @@ void WebContentsImpl::DidFirstVisuallyNonEmptyPaint(
+   }
+ }
+ 
++void WebContentsImpl::DidCommitAndDrawCompositorFrame(
++    RenderViewHostImpl* source) {
++  for (auto& observer : observers_)
++    observer.DidCommitAndDrawCompositorFrame();
++}
++
+ bool WebContentsImpl::IsPortal() const {
+   return portal();
+ }
+diff --git content/browser/web_contents/web_contents_impl.h content/browser/web_contents/web_contents_impl.h
+index 71299edb9e3c..7ba91010834f 100644
+--- content/browser/web_contents/web_contents_impl.h
++++ content/browser/web_contents/web_contents_impl.h
+@@ -704,6 +704,7 @@ class CONTENT_EXPORT WebContentsImpl : public WebContents,
+   bool IsSpatialNavigationDisabled() const override;
+   RenderFrameHostImpl* GetPendingMainFrame() override;
+   void DidFirstVisuallyNonEmptyPaint(RenderViewHostImpl* source) override;
++  void DidCommitAndDrawCompositorFrame(RenderViewHostImpl* source) override;
+   bool IsPortal() const override;
+ 
+   // NavigatorDelegate ---------------------------------------------------------
+diff --git content/common/widget_messages.h content/common/widget_messages.h
+index 1fbd8f1fccb9..dbcff8941b61 100644
+--- content/common/widget_messages.h
++++ content/common/widget_messages.h
+@@ -135,6 +135,9 @@ IPC_MESSAGE_ROUTED3(
+ // accordingly, etc.).
+ IPC_MESSAGE_ROUTED1(WidgetMsg_SetActive, bool /* active */)
+ 
++// Sets whether the render process should skip drawing results.
++IPC_MESSAGE_ROUTED1(WidgetMsg_SetSkipDrawing, bool /* skip_drawing */)
++
+ // Changes the text direction of the currently selected input field (if any).
+ IPC_MESSAGE_ROUTED1(WidgetMsg_SetTextDirection,
+                     blink::WebTextDirection /* direction */)
+@@ -298,6 +301,9 @@ IPC_MESSAGE_ROUTED0(WidgetHostMsg_WaitForNextFrameForTests_ACK)
+ // after the frame widget has painted something.
+ IPC_MESSAGE_ROUTED0(WidgetHostMsg_DidFirstVisuallyNonEmptyPaint)
+ 
++// Sent once the RenderWidgetCompositor issues a draw command.
++IPC_MESSAGE_ROUTED0(WidgetHostMsg_DidCommitAndDrawCompositorFrame)
++
+ // Notifies whether there are JavaScript touch event handlers or not.
+ IPC_MESSAGE_ROUTED1(WidgetHostMsg_HasTouchEventHandlers,
+                     bool /* has_handlers */)
+diff --git content/public/browser/render_widget_host.h content/public/browser/render_widget_host.h
+index 69df05953e7f..d2f9e6e1ac85 100644
+--- content/public/browser/render_widget_host.h
++++ content/public/browser/render_widget_host.h
+@@ -212,6 +212,9 @@ class CONTENT_EXPORT RenderWidgetHost : public IPC::Sender {
+   // Returns true if the renderer is considered unresponsive.
+   virtual bool IsCurrentlyUnresponsive() = 0;
+ 
++  // Sets whether the render process should skip drawing results on this widget.
++  virtual void SetSkipDrawing(bool skip_drawing, base::OnceClosure callback) = 0;
++
+   // Called to propagate updated visual properties to the renderer. Returns
+   // whether the renderer has been informed of updated properties.
+   virtual bool SynchronizeVisualProperties() = 0;
+diff --git content/public/browser/web_contents_observer.h content/public/browser/web_contents_observer.h
+index e6562beb5c41..cf0b99059619 100644
+--- content/public/browser/web_contents_observer.h
++++ content/public/browser/web_contents_observer.h
+@@ -566,6 +566,11 @@ class CONTENT_EXPORT WebContentsObserver : public IPC::Listener {
+       const std::string& interface_name,
+       mojo::ScopedMessagePipeHandle* interface_pipe) {}
+ 
++  // Notifies that the RenderWidgetCompositor has issued a draw command. An
++  // observer can use this method to detect when Chrome visually updated a
++  // tab.
++  virtual void DidCommitAndDrawCompositorFrame() {}
++
+   // Called when "audible" playback starts or stops on a WebAudio AudioContext.
+   using AudioContextId = std::pair<RenderFrameHost*, int>;
+   virtual void AudioContextPlaybackStarted(
+diff --git content/renderer/render_widget.cc content/renderer/render_widget.cc
+index 1e5d62857eb0..5b601a08b262 100644
+--- content/renderer/render_widget.cc
++++ content/renderer/render_widget.cc
+@@ -645,6 +645,7 @@ bool RenderWidget::OnMessageReceived(const IPC::Message& message) {
+     IPC_MESSAGE_HANDLER(WidgetMsg_SetBounds_ACK, OnRequestSetBoundsAck)
+     IPC_MESSAGE_HANDLER(WidgetMsg_UpdateScreenRects, OnUpdateScreenRects)
+     IPC_MESSAGE_HANDLER(WidgetMsg_ForceRedraw, OnForceRedraw)
++    IPC_MESSAGE_HANDLER(WidgetMsg_SetSkipDrawing, OnSetSkipDrawing)
+     IPC_MESSAGE_HANDLER(WidgetMsg_SetViewportIntersection,
+                         OnSetViewportIntersection)
+     IPC_MESSAGE_HANDLER(WidgetMsg_SetIsInert, OnSetIsInert)
+@@ -666,6 +667,11 @@ bool RenderWidget::OnMessageReceived(const IPC::Message& message) {
+   return handled;
+ }
+ 
++void RenderWidget::OnSetSkipDrawing(bool skip_drawing) {
++  TRACE_EVENT1("renderer", "RenderWidget::OnSetSkipDrawing", "skip", skip_drawing);
++  layer_tree_view_->layer_tree_host()->SetSkipDrawing(skip_drawing);
++}
++
+ bool RenderWidget::Send(IPC::Message* message) {
+   // Undead RenderWidgets should not be used.
+   CHECK(!is_undead_);
+@@ -1298,6 +1304,8 @@ void RenderWidget::DidCommitAndDrawCompositorFrame() {
+ 
+   // Notify subclasses that we initiated the paint operation.
+   DidInitiatePaint();
++
++  Send(new WidgetHostMsg_DidCommitAndDrawCompositorFrame(routing_id_));
+ }
+ 
+ void RenderWidget::WillCommitCompositorFrame() {
+diff --git content/renderer/render_widget.h content/renderer/render_widget.h
+index 48724e5c616f..4e7fdd95381e 100644
+--- content/renderer/render_widget.h
++++ content/renderer/render_widget.h
+@@ -770,6 +770,7 @@ class CONTENT_EXPORT RenderWidget
+   void OnUpdateVideoAck(int32_t video_id);
+   void OnRequestSetBoundsAck();
+   void OnForceRedraw(int snapshot_id);
++  void OnSetSkipDrawing(bool skip_drawing);
+   void OnShowContextMenu(ui::MenuSourceType source_type,
+                          const gfx::Point& location);
+ 
+diff --git content/test/stub_render_widget_host_owner_delegate.h content/test/stub_render_widget_host_owner_delegate.h
+index 3185b79b98f3..fdb151a1a9c7 100644
+--- content/test/stub_render_widget_host_owner_delegate.h
++++ content/test/stub_render_widget_host_owner_delegate.h
+@@ -14,6 +14,7 @@ class StubRenderWidgetHostOwnerDelegate : public RenderWidgetHostOwnerDelegate {
+   void RenderWidgetDidInit() override {}
+   void RenderWidgetDidClose() override {}
+   void RenderWidgetDidFirstVisuallyNonEmptyPaint() override {}
++  void RenderWidgetDidCommitAndDrawCompositorFrame() override {}
+   void RenderWidgetGotFocus() override {}
+   void RenderWidgetLostFocus() override {}
+   void RenderWidgetDidForwardMouseEvent(
+diff --git ui/compositor/compositor.cc ui/compositor/compositor.cc
+index f2ecb8c5ca8e..7bb85c8d3360 100644
+--- ui/compositor/compositor.cc
++++ ui/compositor/compositor.cc
+@@ -475,6 +475,11 @@ void Compositor::SetVisible(bool visible) {
+     context_factory_private_->SetDisplayVisible(this, visible);
+ }
+ 
++void Compositor::SetSkipDrawing(bool skip_drawing) {
++  TRACE_EVENT1("cc", "Compositor::SetSkipDrawing", "skip", skip_drawing);
++  host_->SetSkipDrawing(skip_drawing);
++}
++
+ bool Compositor::IsVisible() {
+   return host_->IsVisible();
+ }
+diff --git ui/compositor/compositor.h ui/compositor/compositor.h
+index 17b9c783da91..e314bd4c2320 100644
+--- ui/compositor/compositor.h
++++ ui/compositor/compositor.h
+@@ -300,6 +300,9 @@ class COMPOSITOR_EXPORT Compositor : public cc::LayerTreeHostClient,
+   // Sets the visibility of the underlying compositor.
+   void SetVisible(bool visible);
+ 
++  // Sets whether the underlying compositor should skip drawing results.
++  void SetSkipDrawing(bool skip_drawing);
++
+   // Gets the visibility of the underlying compositor.
+   bool IsVisible();
+ 
