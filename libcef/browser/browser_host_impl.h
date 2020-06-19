@@ -32,6 +32,10 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "extensions/common/view_type.h"
 
+#if defined(USE_AURA)
+#include "ui/views/widget/widget.h"
+#endif  // defined(USE_AURA)
+
 namespace content {
 struct DragEventSourceInfo;
 class RenderWidgetHostImpl;
@@ -48,6 +52,13 @@ class Widget;
 }
 #endif  // defined(USE_AURA)
 
+namespace net {
+class URLRequest;
+}
+
+struct Cef_DraggableRegion_Params;
+struct Cef_Request_Params;
+struct Cef_Response_Params;
 class CefAudioCapturer;
 class CefBrowserInfo;
 class CefBrowserPlatformDelegate;
@@ -274,6 +285,13 @@ class CefBrowserHostImpl : public CefBrowserHost,
   size_t GetFrameCount() override;
   void GetFrameIdentifiers(std::vector<int64>& identifiers) override;
   void GetFrameNames(std::vector<CefString>& names) override;
+  void SetRenderingBlocked(bool blocked) override;
+  #if defined(USE_AURA)
+  void SetRenderingBlockedOnAuraWindowCompositor(bool blocked);
+  #endif  // defined(USE_AURA)
+  #if defined(OS_MACOSX)
+  void SetRenderingBlockedOnMacWindowCompositor(bool blocked);
+  #endif  // defined(OS_MACOSX)
 
   // Returns true if windowless rendering is enabled.
   bool IsWindowless() const;
